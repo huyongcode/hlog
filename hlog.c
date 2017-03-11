@@ -6,20 +6,20 @@
  */
 
 #include "hlog.h"
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdint.h>
-#include <unistd.h>
-#include <sys/mman.h>
-#include <sys/types.h>
-#include <sys/stat.h>
+
+#include <assert.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
-#include <string.h>
 #include <stdarg.h>
-#include <errno.h>
-#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
 #include <sys/sendfile.h>
+#include <time.h>
+#include <unistd.h>
 
 #define SIZE_ALIGN(s, a) (((s) + (a) - 1) & (~((a) - 1)))
 #define TIME_STR_LEN 24
@@ -105,6 +105,11 @@ static struct file_info *fi_list_pull(struct file_info_list *fi_list)
 	}
 	head->next = NULL;
 	return head;
+}
+
+static inline int fi_list_empty(const struct file_info_list *fi_list)
+{
+	return (int)(fi_list->head == NULL);
 }
 
 static void fi_delete(struct file_info *fi)
@@ -197,11 +202,6 @@ static inline int getlogname(struct hlog *log, int index,
 			log->dir, log->name, (unsigned int)getpid(), index);
 }
 
-static int fi_list_empty(const struct file_info_list *fi_list)
-{
-	return (int)(fi_list->head == NULL);
-}
-
 static unsigned int gettid(void)
 {
 	return (unsigned int)pthread_self();
@@ -256,7 +256,7 @@ static inline int va_log(char** buf, int* size,
 	return 0;
 }
 
-int send_file(int ofd, int ifd, size_t len)
+static int send_file(int ofd, int ifd, size_t len)
 {
 	ssize_t r;
 	off_t offset = 0;
@@ -356,10 +356,11 @@ static void *flush_list(void *arg)
 
 			(void)send_file(log->ofd, fi->fd, fi->size);
 
+			/* remove redundant disk logs */
 			pthread_mutex_lock(&log->mutex);
 			nrm = log->cur_nfiles - log->max_nfiles;
 			pthread_mutex_unlock(&log->mutex);
-			/* remove redundant disk logs */
+
 			for (i = 0;
 					nrm > 0 && log->start_reserve_index + i != fi->index;
 					i++) {
@@ -369,7 +370,6 @@ static void *flush_list(void *arg)
 					perror("ERROR: unlink");
 					fprintf(stderr, "ERROR nrm: unlink %s failed\n", filename);
 				}
-
 			}
 			log->start_reserve_index += i;
 			pthread_mutex_lock(&log->mutex);
@@ -500,8 +500,6 @@ int hlog(hlog_t hlog, enum hlog_level level,
 	size_t no_chop;
 	struct file_info *fi;
 	struct file_info *old_fi;
-
-
 //	const char* msg_start;
 //	const size_t msg_size;
 
@@ -549,7 +547,6 @@ int hlog(hlog_t hlog, enum hlog_level level,
 		log->cur_fi = fi;
 		log->index++;
 
-
 		fi_append(log->cur_fi, buffer, size - left);
 
 		pthread_mutex_unlock(&log->mutex);
@@ -566,7 +563,6 @@ int hlog(hlog_t hlog, enum hlog_level level,
 		fi_append(log->cur_fi, buffer, size - left);
 		pthread_mutex_unlock(&log->mutex);
 	}
-	/* flush list */
 
 	if (level == HLOG_FATAL) {
 		fprintf(stderr, "exit\n");
